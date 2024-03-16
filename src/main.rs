@@ -1,8 +1,8 @@
 use clap::*;
-use std::sync::atomic::*;
-use std::str::FromStr;
-use std::process::*;
 use std::io::{self, BufRead as _, Write as _};
+use std::process::*;
+use std::str::FromStr;
+use std::sync::atomic::*;
 use std::time::*;
 
 #[derive(Debug, Parser)]
@@ -31,7 +31,11 @@ static THREADS: AtomicUsize = AtomicUsize::new(0);
 #[tokio::main]
 async fn main() {
     let args = Args::parse();
-    let game_result = [AtomicUsize::new(0), AtomicUsize::new(0), AtomicUsize::new(0)]; // a win | draw | b win
+    let game_result = [
+        AtomicUsize::new(0),
+        AtomicUsize::new(0),
+        AtomicUsize::new(0),
+    ]; // a win | draw | b win
 
     let fens = std::fs::read_to_string(args.opening_positions)
         .unwrap()
@@ -45,12 +49,35 @@ async fn main() {
         let a = unsafe { core::mem::transmute::<_, &'static _>(args.a.as_str()) };
         let b = unsafe { core::mem::transmute::<_, &'static _>(args.b.as_str()) };
         let fen = unsafe { core::mem::transmute::<_, &'static _>(fen.as_str()) };
-        let game_result = unsafe { core::mem::transmute::<_, &'static [AtomicUsize; 3]>(&game_result) };
+        let game_result =
+            unsafe { core::mem::transmute::<_, &'static [AtomicUsize; 3]>(&game_result) };
 
-        play(a, b, game.clone(), fen, args.time, args.inc, game_result, false, args.jobs).await;
+        play(
+            a,
+            b,
+            game.clone(),
+            fen,
+            args.time,
+            args.inc,
+            game_result,
+            false,
+            args.jobs,
+        )
+        .await;
 
         if !args.biased {
-            play(b, a, game.clone(), fen, args.time, args.inc, game_result, true, args.jobs).await;
+            play(
+                b,
+                a,
+                game.clone(),
+                fen,
+                args.time,
+                args.inc,
+                game_result,
+                true,
+                args.jobs,
+            )
+            .await;
         }
     }
 
@@ -96,16 +123,25 @@ fn flip(idx: usize, flip: bool) -> usize {
     }
 }
 
-async fn play(a: &'static str, b: &'static str, mut game: chess::Game, fen: &'static str, time: usize, inc: usize, game_result: &'static [AtomicUsize; 3], polarity: bool, jobs: usize) {
+async fn play(
+    a: &'static str,
+    b: &'static str,
+    a_engine: &'static mut Engine,
+    b_engine: &'static mut Engine,
+    mut game: chess::Game,
+    fen: &'static str,
+    time: usize,
+    inc: usize,
+    game_result: &'static [AtomicUsize; 3],
+    polarity: bool,
+    jobs: usize,
+) {
     while THREADS.load(Ordering::Relaxed) >= jobs {
         core::hint::spin_loop();
     }
 
     THREADS.fetch_add(1, Ordering::Relaxed);
     tokio::spawn(async move {
-        let mut a_engine = Engine::new(a, fen);
-        let mut b_engine = Engine::new(b, fen);
-
         let mut tc = (time, time); // w | b
 
         let mut overtime = 0;
@@ -140,14 +176,29 @@ async fn play(a: &'static str, b: &'static str, mut game: chess::Game, fen: &'st
             game_result[flip(0, polarity)].fetch_add(1, Ordering::Relaxed);
         } else {
             match game.result() {
-                Some(chess::GameResult::WhiteCheckmates) => { game_result[flip(0, polarity)].fetch_add(1, Ordering::Relaxed); },
-                Some(chess::GameResult::BlackCheckmates) => { game_result[flip(2, polarity)].fetch_add(1, Ordering::Relaxed); },
-                Some(chess::GameResult::DrawAccepted | chess::GameResult::DrawDeclared | chess::GameResult::Stalemate) => { game_result[1].fetch_add(1, Ordering::Relaxed); },
+                Some(chess::GameResult::WhiteCheckmates) => {
+                    game_result[flip(0, polarity)].fetch_add(1, Ordering::Relaxed);
+                }
+                Some(chess::GameResult::BlackCheckmates) => {
+                    game_result[flip(2, polarity)].fetch_add(1, Ordering::Relaxed);
+                }
+                Some(
+                    chess::GameResult::DrawAccepted
+                    | chess::GameResult::DrawDeclared
+                    | chess::GameResult::Stalemate,
+                ) => {
+                    game_result[1].fetch_add(1, Ordering::Relaxed);
+                }
                 _ => unreachable!(),
             }
         }
 
-        export_pgn(&game, if !polarity { a } else { b }, if polarity { a } else { b }, fen);
+        export_pgn(
+            &game,
+            if !polarity { a } else { b },
+            if polarity { a } else { b },
+            fen,
+        );
 
         println!("\x1b[1;32mInfo:\x1b[0m a game was ended");
 
@@ -180,13 +231,15 @@ impl<'a> Engine<'a> {
 
         wait_readyok(exec.stdout.as_mut().unwrap());
 
-        Self {
-            exec,
-            fen,
-        }
+        Self { exec, fen }
     }
 
-    async fn get_move(&mut self, game: &mut chess::Game, tc: &mut (usize, usize), inc: usize) -> bool {
+    async fn get_move(
+        &mut self,
+        game: &mut chess::Game,
+        tc: &mut (usize, usize),
+        inc: usize,
+    ) -> bool {
         let tc0 = tc.0;
         let tc1 = tc.1;
 
@@ -199,11 +252,16 @@ impl<'a> Engine<'a> {
             self.exec.stdin.as_ref().unwrap(),
             "position fen {} moves {}",
             self.fen,
-            game.actions().iter()
-                .map(|a| match a { chess::Action::MakeMove(m) => m.to_string(), _ => "".to_string() })
+            game.actions()
+                .iter()
+                .map(|a| match a {
+                    chess::Action::MakeMove(m) => m.to_string(),
+                    _ => "".to_string(),
+                })
                 .collect::<Vec<String>>()
                 .join(" ")
-        ).unwrap();
+        )
+        .unwrap();
 
         let start = Instant::now();
 
@@ -212,22 +270,21 @@ impl<'a> Engine<'a> {
             "go wtime {} winc {inc} btime {} binc {inc}",
             tc0,
             tc1
-        ).unwrap();
+        )
+        .unwrap();
 
-        let m = tokio::time::timeout(
-            Duration::from_millis(*mt as u64),
-            async move {
-                let mut lines = io::BufReader::new(self.exec.stdout.as_mut().unwrap()).lines();
-                while let Some(Ok(l)) = lines.next() {
-                    let mut tokens = l.split_whitespace();
-                    if matches!(tokens.next(), Some("bestmove")) {
-                        return Some(move_from_uci(&tokens.next().unwrap()));
-                    }
+        let m = tokio::time::timeout(Duration::from_millis(*mt as u64), async move {
+            let mut lines = io::BufReader::new(self.exec.stdout.as_mut().unwrap()).lines();
+            while let Some(Ok(l)) = lines.next() {
+                let mut tokens = l.split_whitespace();
+                if matches!(tokens.next(), Some("bestmove")) {
+                    return Some(move_from_uci(&tokens.next().unwrap()));
                 }
-
-                None
             }
-        ).await;
+
+            None
+        })
+        .await;
 
         m.ok().flatten().map_or(false, |m| {
             let used_time = start.elapsed().as_millis() as usize;
@@ -303,7 +360,17 @@ fn export_pgn(game: &chess::Game, w: &str, b: &str, fen: &str) {
 
     let mut board = chess::Board::from_str(fen).unwrap();
 
-    for (i, m) in game.actions().iter().filter_map(|a| match a { chess::Action::MakeMove(m) => Some(m), _ => None }).collect::<Vec<&chess::ChessMove>>().chunks(2).enumerate() {
+    for (i, m) in game
+        .actions()
+        .iter()
+        .filter_map(|a| match a {
+            chess::Action::MakeMove(m) => Some(m),
+            _ => None,
+        })
+        .collect::<Vec<&chess::ChessMove>>()
+        .chunks(2)
+        .enumerate()
+    {
         write!(pgn, "{}. ", i + 1).unwrap();
 
         for m in m {
@@ -320,12 +387,22 @@ fn export_pgn(game: &chess::Game, w: &str, b: &str, fen: &str) {
 
     pgn += result;
 
-    std::fs::write(format!("game_{}.pgn", UNIX_EPOCH.elapsed().unwrap().as_millis()), pgn).unwrap();
+    std::fs::write(
+        format!("game_{}.pgn", UNIX_EPOCH.elapsed().unwrap().as_millis()),
+        pgn,
+    )
+    .unwrap();
 }
 
 fn make_san(board: &mut chess::Board, m: chess::ChessMove) -> String {
     let cr = board.my_castle_rights();
-    if m.get_source() == board.king_square(board.side_to_move()) && !matches!(m.get_dest().get_file(), chess::File::D | chess::File::G) && matches!(m.get_dest().get_rank(), chess::Rank::First | chess::Rank::Eighth) {
+    if m.get_source() == board.king_square(board.side_to_move())
+        && !matches!(m.get_dest().get_file(), chess::File::D | chess::File::G)
+        && matches!(
+            m.get_dest().get_rank(),
+            chess::Rank::First | chess::Rank::Eighth
+        )
+    {
         if m.get_dest().get_file() < m.get_source().get_file() && cr.has_queenside() {
             *board = board.make_move_new(m);
 
