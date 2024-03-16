@@ -36,7 +36,7 @@ while True:
 
         print("\x1b[1A{}".format(i))
 
-        if i >= 256:
+        if i >= 2048:
             break
 
 db.close()
