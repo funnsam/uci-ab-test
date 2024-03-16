@@ -94,9 +94,9 @@ async fn main() {
     let term_size = term_size::dimensions().unwrap_or((80, 24));
     let bar_length = term_size.0 - 4;
 
-    let a_bar_length = ((a as f32 / total as f32) * bar_length as f32) as usize;
-    let d_bar_length = ((d as f32 / total as f32) * bar_length as f32) as usize;
-    let b_bar_length = ((b as f32 / total as f32) * bar_length as f32) as usize;
+    let a_bar_length = ((a as f32 / total as f32) * bar_length as f32).round() as usize;
+    let d_bar_length = ((d as f32 / total as f32) * bar_length as f32).round() as usize;
+    let b_bar_length = bar_length - a_bar_length - d_bar_length;
 
     let a_bar = "━".repeat(a_bar_length);
     let d_bar = "━".repeat(d_bar_length);
@@ -126,8 +126,6 @@ fn flip(idx: usize, flip: bool) -> usize {
 async fn play(
     a: &'static str,
     b: &'static str,
-    a_engine: &'static mut Engine,
-    b_engine: &'static mut Engine,
     mut game: chess::Game,
     fen: &'static str,
     time: usize,
@@ -142,6 +140,9 @@ async fn play(
 
     THREADS.fetch_add(1, Ordering::Relaxed);
     tokio::spawn(async move {
+        let mut a_engine = Engine::new(a, fen);
+        let mut b_engine = Engine::new(b, fen);
+
         let mut tc = (time, time); // w | b
 
         let mut overtime = 0;
