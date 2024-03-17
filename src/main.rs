@@ -102,6 +102,11 @@ async fn main() {
     let d_bar = "━".repeat(d_bar_length);
     let b_bar = "━".repeat(b_bar_length);
 
+    let _d_pad = a_bar_length as isize - a.checked_ilog10().unwrap_or(0) as isize - 1;
+    let d_pad = _d_pad.max(1) as usize;
+    let d_error = d_pad as isize - _d_pad;
+    let b_pad = (d_bar_length as isize - d.checked_ilog10().unwrap_or(0) as isize - 1 - d_error).max(1) as usize;
+
     let indents_length = term_size.0 - " SUMMARY ".len();
     let l_indent_length = indents_length / 2;
     let r_indent_length = indents_length - l_indent_length;
@@ -111,7 +116,7 @@ async fn main() {
 
     println!("\n\n\x1b[1m{} SUMMARY {}\x1b[0m", l_indent, r_indent);
     println!("\x1b[1mTotal:\x1b[0m {total} games");
-    println!("   \x1b[32mA wins: {a}\x1b[90m | Draws: {d} | \x1b[31mA loses: {b}\x1b[0m");
+    println!("  \x1b[32m{a}\x1b[90m\x1b[{d_pad}C{d}\x1b[31m\x1b[{b_pad}C{b}\x1b[0m");
     println!("  \x1b[32m{a_bar}\x1b[90m{d_bar}\x1b[31m{b_bar}\x1b[0m");
 }
 
@@ -429,7 +434,9 @@ fn make_san(board: &mut chess::Board, m: chess::ChessMove) -> String {
         let mut g = chess::MoveGen::new_legal(board);
         g.set_iterator_mask(mask);
         for m in g {
-            pieces |= chess::BitBoard::from_square(m.get_source());
+            if board.piece_on(m.get_source()).unwrap() == piece {
+                pieces |= chess::BitBoard::from_square(m.get_source());
+            }
         }
 
         pieces &= !(chess::BitBoard::from_square(m.get_source()));
@@ -443,11 +450,18 @@ fn make_san(board: &mut chess::Board, m: chess::ChessMove) -> String {
                 san += &m.get_source().to_string();
             }
         }
-    } else if board.piece_on(m.get_dest()).is_some() {
-        san.push((b'a' + m.get_source().get_file() as u8) as char)
     }
 
-    if board.piece_on(m.get_dest()).is_some() {
+    let next = board.make_move_new(m);
+
+    // en passant
+    let captured = board.combined().popcnt() != next.combined().popcnt();
+
+    if captured {
+        if piece == chess::Piece::Pawn {
+            san.push((b'a' + m.get_source().get_file() as u8) as char);
+        }
+
         san += "x";
     }
 
@@ -458,13 +472,13 @@ fn make_san(board: &mut chess::Board, m: chess::ChessMove) -> String {
         san += &p.to_string(chess::Color::White);
     }
 
-    *board = board.make_move_new(m);
-
-    if matches!(board.status(), chess::BoardStatus::Checkmate) {
+    if matches!(next.status(), chess::BoardStatus::Checkmate) {
         san += "#";
-    } else if board.checkers().0 != 0 {
+    } else if next.checkers().0 != 0 {
         san += "+";
     }
+
+    *board = next;
 
     san
 }
