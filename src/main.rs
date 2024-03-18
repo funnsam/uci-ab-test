@@ -1,9 +1,10 @@
 use clap::*;
-use std::io::{self, BufRead as _, Write as _};
-use std::process::*;
 use std::str::FromStr;
-use std::sync::atomic::*;
-use std::time::*;
+use std::sync::{atomic::*, *};
+
+mod elo;
+mod engine;
+mod pgn;
 
 #[derive(Debug, Parser)]
 struct Args {
@@ -50,16 +51,29 @@ async fn main() {
         .map(|fen| (chess::Game::from_str(fen).unwrap(), fen.to_string()))
         .collect::<Vec<(chess::Game, String)>>();
 
+    let a_player = Arc::new(Player {
+        path: args.a.as_str().into(),
+        name: engine::Engine::get_name(args.a.as_str())
+            .map_or_else(|| args.a.as_str().into(), |a| a.as_str().into()),
+        elo: Arc::new(Mutex::new(args.a_elo)),
+    });
+    let b_player = Arc::new(Player {
+        path: args.b.as_str().into(),
+        name: engine::Engine::get_name(args.b.as_str())
+            .map_or_else(|| args.b.as_str().into(), |a| a.as_str().into()),
+        elo: Arc::new(Mutex::new(args.b_elo)),
+    });
+
+    println!("\x1b[1;32mInfo:\x1b[0m initialization complete");
+
     for (game, fen) in fens.iter() {
-        let a = unsafe { core::mem::transmute::<_, &'static _>(args.a.as_str()) };
-        let b = unsafe { core::mem::transmute::<_, &'static _>(args.b.as_str()) };
         let fen = unsafe { core::mem::transmute::<_, &'static _>(fen.as_str()) };
         let game_result =
             unsafe { core::mem::transmute::<_, &'static [AtomicUsize; 3]>(&game_result) };
 
         play(
-            a,
-            b,
+            Arc::clone(&a_player),
+            Arc::clone(&b_player),
             game.clone(),
             fen,
             args.time,
@@ -72,8 +86,8 @@ async fn main() {
 
         if !args.biased {
             play(
-                b,
-                a,
+                Arc::clone(&b_player),
+                Arc::clone(&a_player),
                 game.clone(),
                 fen,
                 args.time,
@@ -110,7 +124,8 @@ async fn main() {
     let _d_pad = a_bar_length as isize - a.checked_ilog10().unwrap_or(0) as isize - 1;
     let d_pad = _d_pad.max(1) as usize;
     let d_error = d_pad as isize - _d_pad;
-    let b_pad = (d_bar_length as isize - d.checked_ilog10().unwrap_or(0) as isize - 1 - d_error).max(1) as usize;
+    let b_pad = (d_bar_length as isize - d.checked_ilog10().unwrap_or(0) as isize - 1 - d_error)
+        .max(1) as usize;
 
     let indents_length = term_size.0 - " SUMMARY ".len();
     let l_indent_length = indents_length / 2;
@@ -123,25 +138,30 @@ async fn main() {
     println!("\x1b[1mTotal:\x1b[0m {total} games");
     println!("  \x1b[32m{a}\x1b[90m\x1b[{d_pad}C{d}\x1b[31m\x1b[{b_pad}C{b}\x1b[0m");
     println!("  \x1b[32m{a_bar}\x1b[90m{d_bar}\x1b[31m{b_bar}\x1b[0m");
-
-    let mut a_elo = args.a_elo;
-    let mut b_elo = args.b_elo;
-
-    elo_update(&mut a_elo, &mut b_elo, a as f32 + (d as f32) / 2.0, b as f32 + (d as f32) / 2.0);
-    println!("\n \x1b[1mElo:\x1b[0m A: {a_elo:.0}, B: {b_elo:.0}");
+    println!(
+        "\n \x1b[1mElo:\x1b[0m A: {:.0}, B: {:.0}",
+        a_player.elo.lock().unwrap(),
+        b_player.elo.lock().unwrap()
+    );
 }
 
-fn flip(idx: usize, flip: bool) -> usize {
+fn flip(idx: usize, flip: bool, n: usize) -> usize {
     if flip {
-        2 - idx
+        n - idx
     } else {
         idx
     }
 }
 
+pub struct Player {
+    pub path: Arc<str>,
+    pub name: Arc<str>,
+    pub elo: Arc<Mutex<f32>>,
+}
+
 async fn play(
-    a: &'static str,
-    b: &'static str,
+    a: Arc<Player>,
+    b: Arc<Player>,
     mut game: chess::Game,
     fen: &'static str,
     time: usize,
@@ -156,12 +176,14 @@ async fn play(
 
     THREADS.fetch_add(1, Ordering::Relaxed);
     tokio::spawn(async move {
-        let mut a_engine = Engine::new(a, fen);
-        let mut b_engine = Engine::new(b, fen);
+        let mut a_engine = engine::Engine::new(a.path.as_ref(), fen);
+        let mut b_engine = engine::Engine::new(b.path.as_ref(), fen);
+
+        let (w, b) = if !polarity { (&a, &b) } else { (&b, &a) };
 
         let mut tc = (time, time); // w | b
-
         let mut overtime = 0;
+        let mut r = [0.0; 2];
 
         'a: while game.result().is_none() {
             if !a_engine.get_move(&mut game, &mut tc, inc).await {
@@ -188,16 +210,20 @@ async fn play(
         }
 
         if overtime == 1 {
-            game_result[flip(2, polarity)].fetch_add(1, Ordering::Relaxed);
+            game_result[flip(2, polarity, 2)].fetch_add(1, Ordering::Relaxed);
+            r[flip(1, polarity, 1)] = 1.0;
         } else if overtime == 2 {
-            game_result[flip(0, polarity)].fetch_add(1, Ordering::Relaxed);
+            game_result[flip(0, polarity, 2)].fetch_add(1, Ordering::Relaxed);
+            r[flip(0, polarity, 1)] = 1.0;
         } else {
             match game.result() {
                 Some(chess::GameResult::WhiteCheckmates) => {
-                    game_result[flip(0, polarity)].fetch_add(1, Ordering::Relaxed);
+                    game_result[flip(0, polarity, 2)].fetch_add(1, Ordering::Relaxed);
+                    r[flip(0, polarity, 1)] = 1.0;
                 }
                 Some(chess::GameResult::BlackCheckmates) => {
-                    game_result[flip(2, polarity)].fetch_add(1, Ordering::Relaxed);
+                    game_result[flip(2, polarity, 2)].fetch_add(1, Ordering::Relaxed);
+                    r[flip(1, polarity, 1)] = 1.0;
                 }
                 Some(
                     chess::GameResult::DrawAccepted
@@ -205,303 +231,25 @@ async fn play(
                     | chess::GameResult::Stalemate,
                 ) => {
                     game_result[1].fetch_add(1, Ordering::Relaxed);
+                    r = [0.5; 2];
                 }
                 _ => unreachable!(),
             }
         }
 
-        export_pgn(
-            &game,
-            if !polarity { a } else { b },
-            if polarity { a } else { b },
-            fen,
-        );
+            println!("ok");
+        let (mut w_pe, mut b_pe, mut w_e, mut b_e) = elo::update(&a.elo, &b.elo, r[0], r[1]);
+            println!("ok");
 
-        println!("\x1b[1;32mInfo:\x1b[0m a game was ended");
+        if polarity {
+            core::mem::swap(&mut w_pe, &mut b_pe);
+            core::mem::swap(&mut w_e, &mut b_e);
+        }
+
+        let filename = pgn::export_pgn(&game, &w.name, &b.name, fen, w_e, b_e);
+
+        println!("\x1b[1;32mInfo:\x1b[0m {} \x1b[90m({w_pe:.0}→{w_e:.0})\x1b[0m vs {} \x1b[90m({b_pe:.0}→{b_e:.0})\x1b[0m was exported to {filename}", a.name, b.name);
 
         THREADS.fetch_sub(1, Ordering::Relaxed);
     });
-}
-
-struct Engine<'a> {
-    exec: Child,
-    fen: &'a str,
-}
-
-impl<'a> Drop for Engine<'a> {
-    fn drop(&mut self) {
-        _ = self.exec.kill();
-    }
-}
-
-impl<'a> Engine<'a> {
-    fn new(exec: &str, fen: &'a str) -> Self {
-        let mut exec = std::process::Command::new(exec)
-            .stdin(std::process::Stdio::piped())
-            .stdout(std::process::Stdio::piped())
-            .stderr(std::process::Stdio::null())
-            .spawn()
-            .unwrap();
-        writeln!(exec.stdin.as_ref().unwrap(), "uci").unwrap();
-        writeln!(exec.stdin.as_ref().unwrap(), "isready").unwrap();
-        writeln!(exec.stdin.as_ref().unwrap(), "ucinewgame").unwrap();
-
-        wait_readyok(exec.stdout.as_mut().unwrap());
-
-        Self { exec, fen }
-    }
-
-    async fn get_move(
-        &mut self,
-        game: &mut chess::Game,
-        tc: &mut (usize, usize),
-        inc: usize,
-    ) -> bool {
-        let tc0 = tc.0;
-        let tc1 = tc.1;
-
-        let mt = match game.side_to_move() {
-            chess::Color::White => &mut tc.0,
-            chess::Color::Black => &mut tc.1,
-        };
-
-        writeln!(
-            self.exec.stdin.as_ref().unwrap(),
-            "position fen {} moves {}",
-            self.fen,
-            game.actions()
-                .iter()
-                .map(|a| match a {
-                    chess::Action::MakeMove(m) => m.to_string(),
-                    _ => "".to_string(),
-                })
-                .collect::<Vec<String>>()
-                .join(" ")
-        )
-        .unwrap();
-
-        let start = Instant::now();
-
-        writeln!(
-            self.exec.stdin.as_ref().unwrap(),
-            "go wtime {} winc {inc} btime {} binc {inc}",
-            tc0,
-            tc1
-        )
-        .unwrap();
-
-        let m = tokio::time::timeout(Duration::from_millis(*mt as u64), async move {
-            let mut lines = io::BufReader::new(self.exec.stdout.as_mut().unwrap()).lines();
-            while let Some(Ok(l)) = lines.next() {
-                let mut tokens = l.split_whitespace();
-                if matches!(tokens.next(), Some("bestmove")) {
-                    return Some(move_from_uci(&tokens.next().unwrap()));
-                }
-            }
-
-            None
-        })
-        .await;
-
-        m.ok().flatten().map_or(false, |m| {
-            let used_time = start.elapsed().as_millis() as usize;
-
-            if !game.current_position().legal(m) {
-                return false;
-            }
-
-            game.make_move(m);
-
-            let time = (*mt + inc).checked_sub(used_time);
-            if let Some(time) = time {
-                *mt = time;
-                true
-            } else {
-                false
-            }
-        })
-    }
-}
-
-fn wait_readyok(out: &mut ChildStdout) {
-    for l in io::BufReader::new(out).lines() {
-        if l.map_or(false, |a| a.starts_with("readyok")) {
-            return;
-        }
-    }
-}
-
-fn move_from_uci(m: &str) -> chess::ChessMove {
-    let src = &m[0..2];
-    let src = unsafe {
-        chess::Square::new(((src.as_bytes()[1] - b'1') << 3) + (src.as_bytes()[0] - b'a'))
-    };
-
-    let dst = &m[2..4];
-    let dst = unsafe {
-        chess::Square::new(((dst.as_bytes()[1] - b'1') << 3) + (dst.as_bytes()[0] - b'a'))
-    };
-
-    let piece = m.as_bytes().get(4).and_then(|p| match p {
-        b'n' => Some(chess::Piece::Knight),
-        b'b' => Some(chess::Piece::Bishop),
-        b'q' => Some(chess::Piece::Queen),
-        b'r' => Some(chess::Piece::Rook),
-        _ => None,
-    });
-
-    chess::ChessMove::new(src, dst, piece)
-}
-
-fn export_pgn(game: &chess::Game, w: &str, b: &str, fen: &str) {
-    use std::fmt::Write as _;
-
-    let mut pgn = String::new();
-    writeln!(pgn, r#"[Event "AB test"]"#).unwrap();
-    writeln!(pgn, r#"[Site "https://github.com/funnsam/uci-ab-test"]"#).unwrap();
-    writeln!(pgn, r#"[Date "??"]"#).unwrap();
-    writeln!(pgn, r#"[Round "??"]"#).unwrap();
-    writeln!(pgn, r#"[White "{w}"]"#).unwrap();
-    writeln!(pgn, r#"[Black "{b}"]"#).unwrap();
-
-    let result = match game.result() {
-        Some(chess::GameResult::BlackResigns | chess::GameResult::WhiteCheckmates) => "1-0",
-        Some(chess::GameResult::WhiteResigns | chess::GameResult::BlackCheckmates) => "0-1",
-        Some(_) => "1/2-1/2",
-        None => "*",
-    };
-
-    writeln!(pgn, r#"[Result "{result}"]"#).unwrap();
-    writeln!(pgn, r#"[FEN "{fen}"]"#).unwrap();
-    writeln!(pgn).unwrap();
-
-    let mut board = chess::Board::from_str(fen).unwrap();
-
-    for (i, m) in game
-        .actions()
-        .iter()
-        .filter_map(|a| match a {
-            chess::Action::MakeMove(m) => Some(m),
-            _ => None,
-        })
-        .collect::<Vec<&chess::ChessMove>>()
-        .chunks(2)
-        .enumerate()
-    {
-        write!(pgn, "{}. ", i + 1).unwrap();
-
-        for m in m {
-            let m = make_san(&mut board, **m);
-
-            if pgn.lines().last().unwrap().len() + m.len() >= 100 {
-                pgn = pgn.trim_end().to_string();
-                writeln!(pgn).unwrap();
-            }
-
-            write!(pgn, "{m} ").unwrap();
-        }
-    }
-
-    pgn += result;
-
-    std::fs::write(
-        format!("game_{}.pgn", UNIX_EPOCH.elapsed().unwrap().as_millis()),
-        pgn,
-    )
-    .unwrap();
-}
-
-fn make_san(board: &mut chess::Board, m: chess::ChessMove) -> String {
-    let cr = board.my_castle_rights();
-    if m.get_source() == board.king_square(board.side_to_move())
-        && !matches!(m.get_dest().get_file(), chess::File::D | chess::File::G)
-        && matches!(
-            m.get_dest().get_rank(),
-            chess::Rank::First | chess::Rank::Eighth
-        )
-    {
-        if m.get_dest().get_file() < m.get_source().get_file() && cr.has_queenside() {
-            *board = board.make_move_new(m);
-
-            return "O-O-O".to_string();
-        } else if cr.has_kingside() {
-            *board = board.make_move_new(m);
-
-            return "O-O".to_string();
-        }
-    }
-
-    let mut san = String::new();
-
-    let piece = board.piece_on(m.get_source()).unwrap();
-    if piece != chess::Piece::Pawn {
-        san += &piece.to_string(chess::Color::White);
-    };
-
-    if piece != chess::Piece::Pawn {
-        let mask = chess::BitBoard::from_square(m.get_dest());
-        let mut pieces = chess::BitBoard::new(0);
-
-        let mut g = chess::MoveGen::new_legal(board);
-        g.set_iterator_mask(mask);
-        for m in g {
-            if board.piece_on(m.get_source()).unwrap() == piece {
-                pieces |= chess::BitBoard::from_square(m.get_source());
-            }
-        }
-
-        pieces &= !(chess::BitBoard::from_square(m.get_source()));
-
-        if pieces.0 != 0 {
-            if (pieces & chess::get_file(m.get_source().get_file())).0 == 0 {
-                san.push((b'a' + m.get_source().get_file() as u8) as char);
-            } else if (pieces & chess::get_rank(m.get_source().get_rank())).0 == 0 {
-                san.push((b'1' + m.get_source().get_rank() as u8) as char);
-            } else {
-                san += &m.get_source().to_string();
-            }
-        }
-    }
-
-    let next = board.make_move_new(m);
-
-    // en passant
-    let captured = board.combined().popcnt() != next.combined().popcnt();
-
-    if captured {
-        if piece == chess::Piece::Pawn {
-            san.push((b'a' + m.get_source().get_file() as u8) as char);
-        }
-
-        san += "x";
-    }
-
-    san += &m.get_dest().to_string();
-
-    if let Some(p) = m.get_promotion() {
-        san += "=";
-        san += &p.to_string(chess::Color::White);
-    }
-
-    if matches!(next.status(), chess::BoardStatus::Checkmate) {
-        san += "#";
-    } else if next.checkers().0 != 0 {
-        san += "+";
-    }
-
-    *board = next;
-
-    san
-}
-
-fn elo_update(r_a: &mut f32, r_b: &mut f32, s_a: f32, s_b: f32) {
-    let q_a = 10.0_f32.powf(*r_a / 400.0);
-    let q_b = 10.0_f32.powf(*r_b / 400.0);
-    let e_a = q_a / (q_a + q_b);
-    let e_b = q_b / (q_a + q_b);
-
-    const K: f32 = 24.0;
-
-    *r_a = *r_a + K * (s_a - e_a);
-    *r_b = *r_b + K * (s_b - e_b);
 }
