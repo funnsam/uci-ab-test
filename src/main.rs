@@ -24,6 +24,11 @@ struct Args {
 
     #[arg(short, long, default_value_t = 1)]
     jobs: usize,
+
+    #[arg(long, default_value_t = 1200.0)]
+    a_elo: f32,
+    #[arg(long, default_value_t = 1200.0)]
+    b_elo: f32,
 }
 
 static THREADS: AtomicUsize = AtomicUsize::new(0);
@@ -118,6 +123,12 @@ async fn main() {
     println!("\x1b[1mTotal:\x1b[0m {total} games");
     println!("  \x1b[32m{a}\x1b[90m\x1b[{d_pad}C{d}\x1b[31m\x1b[{b_pad}C{b}\x1b[0m");
     println!("  \x1b[32m{a_bar}\x1b[90m{d_bar}\x1b[31m{b_bar}\x1b[0m");
+
+    let mut a_elo = args.a_elo;
+    let mut b_elo = args.b_elo;
+
+    elo_update(&mut a_elo, &mut b_elo, a as f32 + (d as f32) / 2.0, b as f32 + (d as f32) / 2.0);
+    println!("\n \x1b[1mElo:\x1b[0m A: {a_elo:.0}, B: {b_elo:.0}");
 }
 
 fn flip(idx: usize, flip: bool) -> usize {
@@ -481,4 +492,16 @@ fn make_san(board: &mut chess::Board, m: chess::ChessMove) -> String {
     *board = next;
 
     san
+}
+
+fn elo_update(r_a: &mut f32, r_b: &mut f32, s_a: f32, s_b: f32) {
+    let q_a = 10.0_f32.powf(*r_a / 400.0);
+    let q_b = 10.0_f32.powf(*r_b / 400.0);
+    let e_a = q_a / (q_a + q_b);
+    let e_b = q_b / (q_a + q_b);
+
+    const K: f32 = 24.0;
+
+    *r_a = *r_a + K * (s_a - e_a);
+    *r_b = *r_b + K * (s_b - e_b);
 }
