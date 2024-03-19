@@ -34,8 +34,7 @@ struct Args {
 
 static THREADS: AtomicUsize = AtomicUsize::new(0);
 
-#[tokio::main]
-async fn main() {
+fn main() {
     let args = Args::parse();
     let game_result = [
         AtomicUsize::new(0),
@@ -55,13 +54,13 @@ async fn main() {
         path: args.a.as_str().into(),
         name: engine::Engine::get_name(args.a.as_str())
             .map_or_else(|| args.a.as_str().into(), |a| a.as_str().into()),
-        elo: Arc::new(Mutex::new(args.a_elo)),
+        elo: Mutex::new(args.a_elo),
     });
     let b_player = Arc::new(Player {
         path: args.b.as_str().into(),
         name: engine::Engine::get_name(args.b.as_str())
             .map_or_else(|| args.b.as_str().into(), |a| a.as_str().into()),
-        elo: Arc::new(Mutex::new(args.b_elo)),
+        elo: Mutex::new(args.b_elo),
     });
 
     println!("\x1b[1;32mInfo:\x1b[0m initialization complete");
@@ -81,8 +80,7 @@ async fn main() {
             game_result,
             false,
             args.jobs,
-        )
-        .await;
+        );
 
         if !args.biased {
             play(
@@ -95,8 +93,7 @@ async fn main() {
                 game_result,
                 true,
                 args.jobs,
-            )
-            .await;
+            );
         }
     }
 
@@ -156,10 +153,10 @@ fn flip(idx: usize, flip: bool, n: usize) -> usize {
 pub struct Player {
     pub path: Arc<str>,
     pub name: Arc<str>,
-    pub elo: Arc<Mutex<f32>>,
+    pub elo: Mutex<f32>,
 }
 
-async fn play(
+fn play(
     a: Arc<Player>,
     b: Arc<Player>,
     mut game: chess::Game,
@@ -175,7 +172,7 @@ async fn play(
     }
 
     THREADS.fetch_add(1, Ordering::Relaxed);
-    tokio::spawn(async move {
+    std::thread::spawn(move || {
         let mut a_engine = engine::Engine::new(a.path.as_ref(), fen);
         let mut b_engine = engine::Engine::new(b.path.as_ref(), fen);
 
@@ -186,7 +183,7 @@ async fn play(
         let mut r = [0.0; 2];
 
         'a: while game.result().is_none() {
-            if !a_engine.get_move(&mut game, &mut tc, inc).await {
+            if !a_engine.get_move(&mut game, &mut tc, inc) {
                 overtime = 1;
                 break 'a;
             }
@@ -199,7 +196,7 @@ async fn play(
                 break 'a;
             }
 
-            if !b_engine.get_move(&mut game, &mut tc, inc).await {
+            if !b_engine.get_move(&mut game, &mut tc, inc) {
                 overtime = 2;
                 break 'a;
             }

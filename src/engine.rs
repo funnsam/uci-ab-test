@@ -60,7 +60,7 @@ impl<'a> Engine<'a> {
         Self { exec, fen }
     }
 
-    pub async fn get_move(
+    pub fn get_move(
         &mut self,
         game: &mut chess::Game,
         tc: &mut (usize, usize),
