@@ -235,9 +235,7 @@ fn play(
             }
         }
 
-            println!("ok");
         let (mut w_pe, mut b_pe, mut w_e, mut b_e) = elo::update(&elos, r[0], r[1]);
-            println!("ok");
 
         if polarity {
             core::mem::swap(&mut w_pe, &mut b_pe);
