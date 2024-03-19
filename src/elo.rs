@@ -1,15 +1,12 @@
 use std::sync::*;
 
-pub fn update(r_a: &Mutex<f32>, r_b: &Mutex<f32>, s_a: f32, s_b: f32) -> (f32, f32, f32, f32) {
+pub fn update(r: &Mutex<(f32, f32)>, s_a: f32, s_b: f32) -> (f32, f32, f32, f32) {
     println!("plock");
-    let mut r_a = r_a.lock().unwrap();
-    println!("alock");
-    let mut r_b = r_b.try_lock().unwrap();
+    let mut r = r.lock().unwrap();
+    println!("lock");
 
-    println!("block");
-
-    let a = *r_a;
-    let b = *r_b;
+    let a = r.0;
+    let b = r.1;
 
     let q_a = 10.0_f32.powf(a / 400.0);
     let q_b = 10.0_f32.powf(b / 400.0);
@@ -24,11 +21,9 @@ pub fn update(r_a: &Mutex<f32>, r_b: &Mutex<f32>, s_a: f32, s_b: f32) -> (f32, f
     let new_a = a + k_a * (s_a - e_a);
     let new_b = b + k_b * (s_b - e_b);
 
-    *r_a = new_a;
-    *r_b = new_b;
+    *r = (new_a, new_b);
 
-    core::mem::drop(r_a);
-    core::mem::drop(r_b);
+    core::mem::drop(r);
 
     println!("a");
     (a, b, new_a, new_b)

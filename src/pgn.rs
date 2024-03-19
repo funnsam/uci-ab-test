@@ -38,6 +38,11 @@ pub fn export_pgn(game: &chess::Game, w: &str, b: &str, fen: &str, w_elo: f32, b
         .chunks(2)
         .enumerate()
     {
+        if pgn.lines().last().unwrap().len() + ((i + 1).ilog10() + 2) as usize >= 100 {
+            pgn = pgn.trim_end().to_string();
+            writeln!(pgn).unwrap();
+        }
+
         write!(pgn, "{}. ", i + 1).unwrap();
 
         for m in m {

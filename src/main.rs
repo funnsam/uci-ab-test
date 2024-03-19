@@ -54,14 +54,15 @@ fn main() {
         path: args.a.as_str().into(),
         name: engine::Engine::get_name(args.a.as_str())
             .map_or_else(|| args.a.as_str().into(), |a| a.as_str().into()),
-        elo: Mutex::new(args.a_elo),
+        // elo: Mutex::new(args.a_elo),
     });
     let b_player = Arc::new(Player {
         path: args.b.as_str().into(),
         name: engine::Engine::get_name(args.b.as_str())
             .map_or_else(|| args.b.as_str().into(), |a| a.as_str().into()),
-        elo: Mutex::new(args.b_elo),
+        // elo: Mutex::new(args.b_elo),
     });
+    let elos = Arc::new(Mutex::new((args.a_elo, args.b_elo)));
 
     println!("\x1b[1;32mInfo:\x1b[0m initialization complete");
 
@@ -73,6 +74,7 @@ fn main() {
         play(
             Arc::clone(&a_player),
             Arc::clone(&b_player),
+            Arc::clone(&elos),
             game.clone(),
             fen,
             args.time,
@@ -86,6 +88,7 @@ fn main() {
             play(
                 Arc::clone(&b_player),
                 Arc::clone(&a_player),
+                Arc::clone(&elos),
                 game.clone(),
                 fen,
                 args.time,
@@ -131,15 +134,13 @@ fn main() {
     let l_indent = "=".repeat(l_indent_length);
     let r_indent = "=".repeat(r_indent_length);
 
+    let elos = elos.lock().unwrap();
+
     println!("\n\n\x1b[1m{} SUMMARY {}\x1b[0m", l_indent, r_indent);
     println!("\x1b[1mTotal:\x1b[0m {total} games");
     println!("  \x1b[32m{a}\x1b[90m\x1b[{d_pad}C{d}\x1b[31m\x1b[{b_pad}C{b}\x1b[0m");
     println!("  \x1b[32m{a_bar}\x1b[90m{d_bar}\x1b[31m{b_bar}\x1b[0m");
-    println!(
-        "\n \x1b[1mElo:\x1b[0m A: {:.0}, B: {:.0}",
-        a_player.elo.lock().unwrap(),
-        b_player.elo.lock().unwrap()
-    );
+    println!("\n \x1b[1mElo:\x1b[0m A: {:.0}, B: {:.0}", elos.0, elos.1);
 }
 
 fn flip(idx: usize, flip: bool, n: usize) -> usize {
@@ -153,12 +154,12 @@ fn flip(idx: usize, flip: bool, n: usize) -> usize {
 pub struct Player {
     pub path: Arc<str>,
     pub name: Arc<str>,
-    pub elo: Mutex<f32>,
 }
 
 fn play(
     a: Arc<Player>,
     b: Arc<Player>,
+    elos: Arc<Mutex<(f32, f32)>>,
     mut game: chess::Game,
     fen: &'static str,
     time: usize,
@@ -235,7 +236,7 @@ fn play(
         }
 
             println!("ok");
-        let (mut w_pe, mut b_pe, mut w_e, mut b_e) = elo::update(&a.elo, &b.elo, r[0], r[1]);
+        let (mut w_pe, mut b_pe, mut w_e, mut b_e) = elo::update(&elos, r[0], r[1]);
             println!("ok");
 
         if polarity {
