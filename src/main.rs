@@ -5,6 +5,7 @@ use std::sync::{atomic::*, *};
 mod elo;
 mod engine;
 mod pgn;
+mod tune;
 
 #[derive(Debug, Parser)]
 struct Args {
