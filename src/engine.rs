@@ -129,6 +129,14 @@ impl<'a> Engine<'a> {
 
         None
     }
+
+    pub fn send_features(&mut self, features: &crate::tune::FeatureVector<i32>) {
+        write!(self.exec.stdin.as_mut().unwrap(), "setoption name FeatureVector ");
+        for i in features.iter() {
+            write!(self.exec.stdin.as_mut().unwrap(), "{i}");
+        }
+        writeln!(self.exec.stdin.as_mut().unwrap());
+    }
 }
 
 fn move_from_uci(m: &str) -> chess::ChessMove {

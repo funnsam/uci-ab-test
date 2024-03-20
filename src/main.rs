@@ -9,6 +9,18 @@ mod tune;
 
 #[derive(Debug, Parser)]
 struct Args {
+    #[command(subcommand)]
+    command: Command,
+}
+
+#[derive(Debug, Subcommand)]
+enum Command {
+    Play(PlayArgs),
+    Tune(TuneArgs),
+}
+
+#[derive(Debug, Args)]
+struct PlayArgs {
     a: String,
     b: String,
 
@@ -33,10 +45,37 @@ struct Args {
     b_elo: f32,
 }
 
+#[derive(Debug, Args)]
+struct TuneArgs {
+    engine: String,
+
+    initial_theta: String,
+
+    #[arg(long, default_value = "openings.txt")]
+    opening_positions: String,
+
+    #[arg(short, long, default_value_t = 100)]
+    iterations: usize,
+
+    #[arg(short = 'n', long, default_value_t = 2)]
+    play_positions: usize,
+
+    #[arg(long, default_value_t = 1)]
+    seed: i32,
+}
+
 static THREADS: AtomicUsize = AtomicUsize::new(0);
 
 fn main() {
     let args = Args::parse();
+
+    match args.command {
+        Command::Play(play_args) => play(play_args),
+        Command::Tune(tune_args) => tune(tune_args),
+    }
+}
+
+fn play(args: PlayArgs) {
     let game_result = [
         AtomicUsize::new(0),
         AtomicUsize::new(0),
@@ -72,7 +111,7 @@ fn main() {
         let game_result =
             unsafe { core::mem::transmute::<_, &'static [AtomicUsize; 3]>(&game_result) };
 
-        play(
+        play_single(
             Arc::clone(&a_player),
             Arc::clone(&b_player),
             Arc::clone(&elos),
@@ -86,7 +125,7 @@ fn main() {
         );
 
         if !args.biased {
-            play(
+            play_single(
                 Arc::clone(&b_player),
                 Arc::clone(&a_player),
                 Arc::clone(&elos),
@@ -144,6 +183,11 @@ fn main() {
     println!("\n \x1b[1mElo:\x1b[0m A: {:.0}, B: {:.0}", elos.0, elos.1);
 }
 
+fn tune(args: TuneArgs) {
+    let theta = tune::FeatureVector::from_binary(&std::fs::read(args.initial_theta).unwrap());
+    tune::tune(args.iterations, &args.engine, theta, todo!(), args.seed);
+}
+
 fn flip(idx: usize, flip: bool, n: usize) -> usize {
     if flip {
         n - idx
@@ -157,7 +201,7 @@ pub struct Player {
     pub name: Arc<str>,
 }
 
-fn play(
+fn play_single(
     a: Arc<Player>,
     b: Arc<Player>,
     elos: Arc<Mutex<(f32, f32)>>,
