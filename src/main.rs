@@ -76,40 +76,31 @@ fn main() {
 }
 
 fn play(args: PlayArgs) {
-    let game_result = [
+    let game_result = Arc::new([
         AtomicUsize::new(0),
         AtomicUsize::new(0),
         AtomicUsize::new(0),
-    ]; // a win | draw | b win
+    ]); // a win | draw | b win
 
-    let fens = std::fs::read_to_string(args.opening_positions)
-        .unwrap()
-        .trim()
-        .lines()
-        .take(args.play_positions)
-        .map(|fen| (chess::Game::from_str(fen).unwrap(), fen.to_string()))
-        .collect::<Vec<(chess::Game, String)>>();
+    let fens = get_fens(&args.opening_positions, args.play_positions);
 
     let a_player = Arc::new(Player {
         path: args.a.as_str().into(),
         name: engine::Engine::get_name(args.a.as_str())
             .map_or_else(|| args.a.as_str().into(), |a| a.as_str().into()),
-        // elo: Mutex::new(args.a_elo),
     });
     let b_player = Arc::new(Player {
         path: args.b.as_str().into(),
         name: engine::Engine::get_name(args.b.as_str())
             .map_or_else(|| args.b.as_str().into(), |a| a.as_str().into()),
-        // elo: Mutex::new(args.b_elo),
     });
     let elos = Arc::new(Mutex::new((args.a_elo, args.b_elo)));
 
     println!("\x1b[1;32mInfo:\x1b[0m initialization complete");
 
-    for (game, fen) in fens.iter() {
+    for fen in fens.iter() {
         let fen = unsafe { core::mem::transmute::<_, &'static _>(fen.as_str()) };
-        let game_result =
-            unsafe { core::mem::transmute::<_, &'static [AtomicUsize; 3]>(&game_result) };
+        let game = chess::Game::from_str(fen).unwrap();
 
         play_single(
             Arc::clone(&a_player),
@@ -119,7 +110,7 @@ fn play(args: PlayArgs) {
             fen,
             args.time,
             args.inc,
-            game_result,
+            Arc::clone(&game_result),
             false,
             args.jobs,
         );
@@ -133,7 +124,7 @@ fn play(args: PlayArgs) {
                 fen,
                 args.time,
                 args.inc,
-                game_result,
+                Arc::clone(&game_result),
                 true,
                 args.jobs,
             );
@@ -184,8 +175,22 @@ fn play(args: PlayArgs) {
 }
 
 fn tune(args: TuneArgs) {
-    let theta = tune::FeatureVector::from_binary(&std::fs::read(args.initial_theta).unwrap());
-    tune::tune(args.iterations, &args.engine, theta, todo!(), args.seed);
+    let theta = tune::FeatureVector::<f32>::from_binary(&std::fs::read(args.initial_theta).unwrap());
+    let fens = get_fens(&args.opening_positions, args.play_positions);
+
+    tune::tune(args.iterations, &args.engine, theta, &fens, args.seed);
+}
+
+fn get_fens(file: &str, n: usize) -> Vec<String> {
+    std::fs::read_to_string(file)
+        .unwrap()
+        .trim()
+        .lines()
+        .take(n)
+        .map(|a| a.to_string())
+        .collect()
+        // .map(|fen| (chess::Game::from_str(fen).unwrap(), fen.to_string()))
+        // .collect::<Vec<(chess::Game, String)>>();
 }
 
 fn flip(idx: usize, flip: bool, n: usize) -> usize {
@@ -209,7 +214,7 @@ fn play_single(
     fen: &'static str,
     time: usize,
     inc: usize,
-    game_result: &'static [AtomicUsize; 3],
+    game_result: Arc<[AtomicUsize; 3]>,
     polarity: bool,
     jobs: usize,
 ) {

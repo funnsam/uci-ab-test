@@ -131,11 +131,11 @@ impl<'a> Engine<'a> {
     }
 
     pub fn send_features(&mut self, features: &crate::tune::FeatureVector<i32>) {
-        write!(self.exec.stdin.as_mut().unwrap(), "setoption name FeatureVector ");
+        write!(self.exec.stdin.as_mut().unwrap(), "setoption name FeatureVector ").unwrap();
         for i in features.iter() {
-            write!(self.exec.stdin.as_mut().unwrap(), "{i}");
+            write!(self.exec.stdin.as_mut().unwrap(), "{i}").unwrap();
         }
-        writeln!(self.exec.stdin.as_mut().unwrap());
+        writeln!(self.exec.stdin.as_mut().unwrap()).unwrap();
     }
 }
 
