@@ -5,35 +5,32 @@ use std::sync::{*, atomic::*};
 const ALPHA: f32 = 0.602;
 const GAMMA: f32 = 0.101;
 const C: f32 = 0.5;
-const MAGNITUDE: f32 = 100.0;
+const MAGNITUDE: f32 = 0.1;
 
 pub fn tune(iterations: usize, engine: &str, mut theta: FeatureVector<f32>, fen: &[String], mut seed: i32, jobs: usize) {
     let ua = iterations as f32 * 0.08;
     let la = 0.1 * (ua + 1.0).powf(ALPHA) / MAGNITUDE;
 
-    for ki in 0..iterations {
+    for ki in 1..=iterations {
         let k = ki as f32;
 
-        let ak = la / (k + 1.0 + ua).powf(ALPHA);
-        let ck = C / (k + 1.0).powf(GAMMA);
+        let ak = la / (k + ua).powf(ALPHA);
+        let ck = C / k.powf(GAMMA);
 
         let mut delta = FeatureVector::empty_with_capacity(theta.len());
         for _ in 0..theta.len() {
             delta.push((2 * (rand(&mut seed) & 1) - 1) as f32);
         }
 
-        println!("{delta:?}");
-
         let ckd = delta * ck;
-
-        println!("{ckd:?}");
 
         let theta_p = theta.clone() + ckd.clone();
         let theta_m = theta.clone() - ckd.clone();
 
         theta = theta + get_result(engine, &theta_p, &theta_m, fen, jobs)._div(ckd) * ak;
 
-        println!("\x1b[1;32mInfo:\x1b[0m iteration {} is done", ki + 1);
+        println!("\x1b[1;32mInfo:\x1b[0m iteration {ki} is done");
+        println!("{theta:?}");
 
         std::fs::write(format!("tune_iter_{k}.flt"), theta.to_binary()).unwrap();
         std::fs::write(format!("tune_iter_{k}.int"), Into::<FeatureVector<i32>>::into(&theta).to_binary()).unwrap();
@@ -101,7 +98,7 @@ fn get_result(engine: &str, a: &FeatureVector<f32>, b: &FeatureVector<f32>, fen:
         core::hint::spin_loop();
     }
 
-    let result = (game_result[0].load(Ordering::Relaxed) as isize - game_result[1].load(Ordering::Relaxed) as isize) as f32;
+    let result = (2 * (game_result[0].load(Ordering::Relaxed) as isize - game_result[1].load(Ordering::Relaxed) as isize)) as f32;
     result / fen.len() as f32
 }
 
@@ -152,7 +149,7 @@ impl Into<FeatureVector<i32>> for &FeatureVector<f32> {
         let mut new = FeatureVector::empty_with_capacity(self.len());
 
         for i in self.iter() {
-            new.push(*i as i32);
+            new.push(i.round() as i32);
         }
 
         new
