@@ -2,3 +2,4 @@
 *.pgn
 *.zst
 openings.txt
+/tune_iter_*

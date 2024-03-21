@@ -62,6 +62,8 @@ struct TuneArgs {
 
     #[arg(long, default_value_t = 1)]
     seed: i32,
+    #[arg(short, long, default_value_t = 1)]
+    jobs: usize,
 }
 
 static THREADS: AtomicUsize = AtomicUsize::new(0);
@@ -99,15 +101,15 @@ fn play(args: PlayArgs) {
     println!("\x1b[1;32mInfo:\x1b[0m initialization complete");
 
     for fen in fens.iter() {
-        let fen = unsafe { core::mem::transmute::<_, &'static _>(fen.as_str()) };
         let game = chess::Game::from_str(fen).unwrap();
+        let fen = fen.as_str().into();
 
         play_single(
             Arc::clone(&a_player),
             Arc::clone(&b_player),
-            Arc::clone(&elos),
+            Some(Arc::clone(&elos)),
             game.clone(),
-            fen,
+            Arc::clone(&fen),
             args.time,
             args.inc,
             Arc::clone(&game_result),
@@ -119,9 +121,9 @@ fn play(args: PlayArgs) {
             play_single(
                 Arc::clone(&b_player),
                 Arc::clone(&a_player),
-                Arc::clone(&elos),
+                Some(Arc::clone(&elos)),
                 game.clone(),
-                fen,
+                Arc::clone(&fen),
                 args.time,
                 args.inc,
                 Arc::clone(&game_result),
@@ -178,7 +180,7 @@ fn tune(args: TuneArgs) {
     let theta = tune::FeatureVector::<f32>::from_binary(&std::fs::read(args.initial_theta).unwrap());
     let fens = get_fens(&args.opening_positions, args.play_positions);
 
-    tune::tune(args.iterations, &args.engine, theta, &fens, args.seed);
+    tune::tune(args.iterations, &args.engine, theta, &fens, args.seed, args.jobs);
 }
 
 fn get_fens(file: &str, n: usize) -> Vec<String> {
@@ -209,11 +211,36 @@ pub struct Player {
 fn play_single(
     a: Arc<Player>,
     b: Arc<Player>,
-    elos: Arc<Mutex<(f32, f32)>>,
-    mut game: chess::Game,
-    fen: &'static str,
+    elos: Option<Arc<Mutex<(f32, f32)>>>,
+    game: chess::Game,
+    fen: Arc<str>,
     time: usize,
     inc: usize,
+    game_result: Arc<[AtomicUsize; 3]>,
+    polarity: bool,
+    jobs: usize,
+) {
+    let a_engine = engine::Engine::new(a.path.as_ref(), &fen);
+    let b_engine = engine::Engine::new(b.path.as_ref(), &fen);
+
+    play_with_engine(a_engine, b_engine, Arc::clone(&a.name), Arc::clone(&b.name), elos, game, fen, time, inc, game_result, polarity, jobs)
+}
+
+fn play_with_engine(
+    mut a_engine: engine::Engine,
+    mut b_engine: engine::Engine,
+
+    a_name: Arc<str>,
+    b_name: Arc<str>,
+
+    elos: Option<Arc<Mutex<(f32, f32)>>>,
+
+    mut game: chess::Game,
+    fen: Arc<str>,
+
+    time: usize,
+    inc: usize,
+
     game_result: Arc<[AtomicUsize; 3]>,
     polarity: bool,
     jobs: usize,
@@ -224,10 +251,7 @@ fn play_single(
 
     THREADS.fetch_add(1, Ordering::Relaxed);
     std::thread::spawn(move || {
-        let mut a_engine = engine::Engine::new(a.path.as_ref(), fen);
-        let mut b_engine = engine::Engine::new(b.path.as_ref(), fen);
-
-        let (w, b) = if !polarity { (&a, &b) } else { (&b, &a) };
+        let (w_name, b_name) = if !polarity { (Arc::clone(&a_name), Arc::clone(&b_name)) } else { (Arc::clone(&b_name), Arc::clone(&a_name)) };
 
         let mut tc = (time, time); // w | b
         let mut overtime = 0;
@@ -285,16 +309,22 @@ fn play_single(
             }
         }
 
-        let (mut w_pe, mut b_pe, mut w_e, mut b_e) = elo::update(&elos, r[0], r[1]);
+        if let Some(elos) = elos {
+            let (mut w_pe, mut b_pe, mut w_e, mut b_e) = elo::update(&elos, r[0], r[1]);
 
-        if polarity {
-            core::mem::swap(&mut w_pe, &mut b_pe);
-            core::mem::swap(&mut w_e, &mut b_e);
+            if polarity {
+                core::mem::swap(&mut w_pe, &mut b_pe);
+                core::mem::swap(&mut w_e, &mut b_e);
+            }
+
+            let filename = pgn::export_pgn(&game, &w_name, &b_name, &fen, Some((w_e, b_e)));
+
+            println!("\x1b[1;32mInfo:\x1b[0m {w_name} \x1b[90m({w_pe:.0}→{w_e:.0})\x1b[0m vs {b_name} \x1b[90m({b_pe:.0}→{b_e:.0})\x1b[0m was exported to {filename}");
+        } else {
+            let filename = pgn::export_pgn(&game, &w_name, &b_name, &fen, None);
+
+            println!("\x1b[1;32mInfo:\x1b[0m {w_name} vs {b_name} was exported to {filename}");
         }
-
-        let filename = pgn::export_pgn(&game, &w.name, &b.name, fen, w_e, b_e);
-
-        println!("\x1b[1;32mInfo:\x1b[0m {} \x1b[90m({w_pe:.0}→{w_e:.0})\x1b[0m vs {} \x1b[90m({b_pe:.0}→{b_e:.0})\x1b[0m was exported to {filename}", a.name, b.name);
 
         THREADS.fetch_sub(1, Ordering::Relaxed);
     });

@@ -2,18 +2,18 @@ use std::io::{self, BufRead as _, Write as _};
 use std::process::*;
 use std::time::*;
 
-pub struct Engine<'a> {
+pub struct Engine {
     exec: Child,
-    fen: &'a str,
+    fen: std::sync::Arc<str>,
 }
 
-impl<'a> Drop for Engine<'a> {
+impl<'a> Drop for Engine {
     fn drop(&mut self) {
         _ = self.exec.kill();
     }
 }
 
-impl<'a> Engine<'a> {
+impl Engine {
     pub fn get_name(exec: &str) -> Option<String> {
         let mut exec = std::process::Command::new(exec)
             .stdin(std::process::Stdio::piped())
@@ -40,7 +40,7 @@ impl<'a> Engine<'a> {
         None
     }
 
-    pub fn new(exec: &str, fen: &'a str) -> Self {
+    pub fn new(exec: &str, fen: &str) -> Self {
         let mut exec = std::process::Command::new(exec)
             .stdin(std::process::Stdio::piped())
             .stdout(std::process::Stdio::piped())
@@ -57,7 +57,7 @@ impl<'a> Engine<'a> {
             }
         }
 
-        Self { exec, fen }
+        Self { exec, fen: fen.into() }
     }
 
     pub fn get_move(
@@ -131,9 +131,9 @@ impl<'a> Engine<'a> {
     }
 
     pub fn send_features(&mut self, features: &crate::tune::FeatureVector<i32>) {
-        write!(self.exec.stdin.as_mut().unwrap(), "setoption name FeatureVector ").unwrap();
+        write!(self.exec.stdin.as_mut().unwrap(), "settraindata ").unwrap();
         for i in features.iter() {
-            write!(self.exec.stdin.as_mut().unwrap(), "{i}").unwrap();
+            write!(self.exec.stdin.as_mut().unwrap(), "{i} ").unwrap();
         }
         writeln!(self.exec.stdin.as_mut().unwrap()).unwrap();
     }

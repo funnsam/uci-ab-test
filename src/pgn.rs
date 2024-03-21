@@ -1,7 +1,7 @@
 use std::str::FromStr;
 use std::time::*;
 
-pub fn export_pgn(game: &chess::Game, w: &str, b: &str, fen: &str, w_elo: f32, b_elo: f32) -> String {
+pub fn export_pgn(game: &chess::Game, w: &str, b: &str, fen: &str, elo: Option<(f32, f32)>) -> String {
     use std::fmt::Write as _;
 
     let mut pgn = String::new();
@@ -11,8 +11,10 @@ pub fn export_pgn(game: &chess::Game, w: &str, b: &str, fen: &str, w_elo: f32, b
     writeln!(pgn, r#"[Round "??"]"#).unwrap();
     writeln!(pgn, r#"[White "{w}"]"#).unwrap();
     writeln!(pgn, r#"[Black "{b}"]"#).unwrap();
-    writeln!(pgn, r#"[WhiteElo "{w_elo:.0}"]"#).unwrap();
-    writeln!(pgn, r#"[BlackElo "{b_elo:.0}"]"#).unwrap();
+    if let Some((w_elo, b_elo)) = elo {
+        writeln!(pgn, r#"[WhiteElo "{w_elo:.0}"]"#).unwrap();
+        writeln!(pgn, r#"[BlackElo "{b_elo:.0}"]"#).unwrap();
+    }
 
     let result = match game.result() {
         Some(chess::GameResult::BlackResigns | chess::GameResult::WhiteCheckmates) => "1-0",

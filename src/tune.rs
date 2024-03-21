@@ -1,41 +1,55 @@
 use std::ops::*;
+use std::str::FromStr;
+use std::sync::{*, atomic::*};
 
 const ALPHA: f32 = 0.602;
 const GAMMA: f32 = 0.101;
 const C: f32 = 0.5;
 const MAGNITUDE: f32 = 100.0;
 
-pub fn tune(iterations: usize, engine: &str, mut theta: FeatureVector<f32>, fen: &[String], mut seed: i32) {
+pub fn tune(iterations: usize, engine: &str, mut theta: FeatureVector<f32>, fen: &[String], mut seed: i32, jobs: usize) {
     let ua = iterations as f32 * 0.08;
     let la = 0.1 * (ua + 1.0).powf(ALPHA) / MAGNITUDE;
 
-    for k in 0..iterations {
-        let k = k as f32;
+    for ki in 0..iterations {
+        let k = ki as f32;
 
         let ak = la / (k + 1.0 + ua).powf(ALPHA);
         let ck = C / (k + 1.0).powf(GAMMA);
 
         let mut delta = FeatureVector::empty_with_capacity(theta.len());
         for _ in 0..theta.len() {
-            delta.push((2 * (rand(&mut seed) % 2) - 1) as f32);
+            delta.push((2 * (rand(&mut seed) & 1) - 1) as f32);
         }
 
+        println!("{delta:?}");
+
         let ckd = delta * ck;
+
+        println!("{ckd:?}");
+
         let theta_p = theta.clone() + ckd.clone();
         let theta_m = theta.clone() - ckd.clone();
 
-        theta = theta + get_result(engine, &theta_p, &theta_m, fen)._div(ckd) * ak;
+        theta = theta + get_result(engine, &theta_p, &theta_m, fen, jobs)._div(ckd) * ak;
+
+        println!("\x1b[1;32mInfo:\x1b[0m iteration {} is done", ki + 1);
 
         std::fs::write(format!("tune_iter_{k}.flt"), theta.to_binary()).unwrap();
         std::fs::write(format!("tune_iter_{k}.int"), Into::<FeatureVector<i32>>::into(&theta).to_binary()).unwrap();
     }
 }
 
-fn get_result(engine: &str, a: &FeatureVector<f32>, b: &FeatureVector<f32>, fen: &[String]) -> f32 {
+fn get_result(engine: &str, a: &FeatureVector<f32>, b: &FeatureVector<f32>, fen: &[String], jobs: usize) -> f32 {
     let a = a.into();
     let b = b.into();
 
-    let result = 0.0;
+    // let result = 0.0;
+    let game_result = Arc::new([
+        AtomicUsize::new(0),
+        AtomicUsize::new(0),
+        AtomicUsize::new(0),
+    ]); // a win | draw | b win
 
     for f in fen.iter() {
         let mut a_engine = crate::engine::Engine::new(engine, &f);
@@ -44,9 +58,50 @@ fn get_result(engine: &str, a: &FeatureVector<f32>, b: &FeatureVector<f32>, fen:
         let mut b_engine = crate::engine::Engine::new(engine, &f);
         b_engine.send_features(&b);
 
-        todo!()
+        let game = chess::Game::from_str(f).unwrap();
+
+        crate::play_with_engine(
+            a_engine,
+            b_engine,
+            engine.into(),
+            engine.into(),
+            None,
+            game.clone(),
+            f.as_str().into(),
+            6000,
+            100,
+            Arc::clone(&game_result),
+            false,
+            jobs
+        );
+
+        let mut a_engine = crate::engine::Engine::new(engine, &f);
+        a_engine.send_features(&a);
+
+        let mut b_engine = crate::engine::Engine::new(engine, &f);
+        b_engine.send_features(&b);
+
+        crate::play_with_engine(
+            b_engine,
+            a_engine,
+            engine.into(),
+            engine.into(),
+            None,
+            game,
+            f.as_str().into(),
+            6000,
+            100,
+            Arc::clone(&game_result),
+            true,
+            jobs
+        );
     }
 
+    while crate::THREADS.load(Ordering::Relaxed) != 0 {
+        core::hint::spin_loop();
+    }
+
+    let result = (game_result[0].load(Ordering::Relaxed) as isize - game_result[1].load(Ordering::Relaxed) as isize) as f32;
     result / fen.len() as f32
 }
 
@@ -149,6 +204,12 @@ impl<T: Clone, R: Clone + Mul<T, Output = T>> Mul<R> for FeatureVector<T> {
         }
 
         self
+    }
+}
+
+impl<T: std::fmt::Debug> std::fmt::Debug for FeatureVector<T> {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        self.features.fmt(f)
     }
 }
 
