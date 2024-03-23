@@ -76,6 +76,7 @@ struct WatchArgs {
     time: usize,
     inc: usize,
 
+    #[arg(default_value = "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1")]
     fen: String,
 }
 
