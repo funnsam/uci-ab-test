@@ -34,5 +34,5 @@ pub fn render(board: &Board, w_name: &str, b_name: &str, last_move: Option<Chess
         println!("\x1b[0m");
     }
 
-    println!("{b_name}\x1b[10A");
+    println!("{w_name}\x1b[10A");
 }
