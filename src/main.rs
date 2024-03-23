@@ -6,6 +6,7 @@ mod elo;
 mod engine;
 mod pgn;
 mod tune;
+mod render;
 
 #[derive(Debug, Parser)]
 struct Args {
@@ -17,6 +18,7 @@ struct Args {
 enum Command {
     Play(PlayArgs),
     Tune(TuneArgs),
+    Watch(WatchArgs),
 }
 
 #[derive(Debug, Args)]
@@ -66,6 +68,17 @@ struct TuneArgs {
     jobs: usize,
 }
 
+#[derive(Debug, Args)]
+struct WatchArgs {
+    w: String,
+    b: String,
+
+    time: usize,
+    inc: usize,
+
+    fen: String,
+}
+
 static THREADS: AtomicUsize = AtomicUsize::new(0);
 
 fn main() {
@@ -74,6 +87,7 @@ fn main() {
     match args.command {
         Command::Play(play_args) => play(play_args),
         Command::Tune(tune_args) => tune(tune_args),
+        Command::Watch(watch_args) => watch(watch_args),
     }
 }
 
@@ -183,6 +197,78 @@ fn tune(args: TuneArgs) {
     tune::tune(args.iterations, &args.engine, theta, &fens, args.seed, args.jobs);
 }
 
+fn watch(args: WatchArgs) {
+    let w_name = engine::Engine::get_name(args.w.as_str()).unwrap_or_else(|| args.w.clone());
+    let b_name = engine::Engine::get_name(args.b.as_str()).unwrap_or_else(|| args.b.clone());
+
+    let mut w_engine = engine::Engine::new(&args.w, &args.fen);
+    let mut b_engine = engine::Engine::new(&args.b, &args.fen);
+
+    let mut game = chess::Game::from_str(&args.fen).unwrap();
+    let mut game_result = [0; 3];
+
+    let mut tc = (args.time, args.time); // w | b
+    let mut overtime = 0;
+
+    render::render(&game.current_position(), &w_name, &b_name, None);
+
+    'a: while game.result().is_none() {
+        if let Some(m) = w_engine.get_move(&mut game, &mut tc, args.inc) {
+            render::render(&game.current_position(), &w_name, &b_name, Some(m));
+        } else {
+            overtime = 1;
+            break 'a;
+        }
+
+
+        if game.can_declare_draw() {
+            game.declare_draw();
+        }
+
+        if game.result().is_some() {
+            break 'a;
+        }
+
+        if let Some(m) = b_engine.get_move(&mut game, &mut tc, args.inc) {
+            render::render(&game.current_position(), &w_name, &b_name, Some(m));
+        } else {
+            overtime = 2;
+            break 'a;
+        }
+
+        if game.can_declare_draw() {
+            game.declare_draw();
+        }
+    }
+
+    if overtime == 1 {
+        game_result[2] += 1;
+    } else if overtime == 2 {
+        game_result[0] += 1;
+    } else {
+        match game.result() {
+            Some(chess::GameResult::WhiteCheckmates) => {
+                game_result[0] += 1;
+            }
+            Some(chess::GameResult::BlackCheckmates) => {
+                game_result[2] += 1;
+            }
+            Some(
+                chess::GameResult::DrawAccepted
+                | chess::GameResult::DrawDeclared
+                | chess::GameResult::Stalemate,
+                ) => {
+                game_result[1] += 1;
+            }
+            _ => unreachable!(),
+        }
+    }
+
+    let filename = pgn::export_pgn(&game, &w_name, &b_name, &args.fen, None);
+
+    println!("\x1b[10B\x1b[1;32mInfo:\x1b[0m {w_name} vs {b_name} was exported to {filename}");
+}
+
 fn get_fens(file: &str, n: usize) -> Vec<String> {
     std::fs::read_to_string(file)
         .unwrap()
@@ -258,7 +344,7 @@ fn play_with_engine(
         let mut r = [0.0; 2];
 
         'a: while game.result().is_none() {
-            if !a_engine.get_move(&mut game, &mut tc, inc) {
+            if a_engine.get_move(&mut game, &mut tc, inc).is_none() {
                 overtime = 1;
                 break 'a;
             }
@@ -271,7 +357,7 @@ fn play_with_engine(
                 break 'a;
             }
 
-            if !b_engine.get_move(&mut game, &mut tc, inc) {
+            if b_engine.get_move(&mut game, &mut tc, inc).is_none() {
                 overtime = 2;
                 break 'a;
             }

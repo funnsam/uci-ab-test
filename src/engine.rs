@@ -65,7 +65,7 @@ impl Engine {
         game: &mut chess::Game,
         tc: &mut (usize, usize),
         inc: usize,
-    ) -> bool {
+    ) -> Option<chess::ChessMove> {
         let tc0 = tc.0;
         let tc1 = tc.1;
 
@@ -99,11 +99,11 @@ impl Engine {
         )
         .unwrap();
 
-        self.find_best_in_time().map_or(false, |m| {
+        self.find_best_in_time().map_or(None, |m| {
             let used_time = start.elapsed().as_millis() as usize;
 
             if !game.current_position().legal(m) {
-                return false;
+                return None;
             }
 
             game.make_move(m);
@@ -111,9 +111,9 @@ impl Engine {
             let time = (*mt + inc).checked_sub(used_time);
             if let Some(time) = time {
                 *mt = time;
-                true
+                Some(m)
             } else {
-                false
+                None
             }
         })
     }
